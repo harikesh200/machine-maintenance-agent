@@ -1,0 +1,47 @@
+{
+    "name": "training-workflows",
+    "version": "1.0.0",
+    "description": "Job-based backend for the machine maintenance agentic workflow.",
+    "module": "src/server.ts",
+    "private": true,
+    "scripts": {
+        "dev": "bun run --watch src/server.ts",
+        "build": "bun build src/server.ts --target=bun --outdir=dist",
+        "start": "bun run src/bootstrap.ts",
+        "typecheck": "tsc --noEmit",
+        "test": "bun test --pass-with-no-tests"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "type": "module",
+    "engines": {
+        "bun": ">=1.3.14"
+    },
+    "dependencies": {
+        "cors": "^2.8.6",
+        "csv-parse": "^7.0.0",
+        "csv-stringify": "^6.8.0",
+        "dotenv": "^17.4.2",
+        "express": "^5.2.1",
+        "express-rate-limit": "^8.5.2",
+        "helmet": "^8.2.0",
+        "multer": "^2.2.0",
+        "nodemailer": "^9.0.1",
+        "openai": "^6.45.0",
+        "pdf-parse": "^2.4.5",
+        "pino": "^10.3.1",
+        "pino-http": "^11.0.0",
+        "zod": "^4.4.3"
+    },
+    "devDependencies": {
+        "@types/bun": "^1.3.5",
+        "@types/cors": "^2.8.19",
+        "@types/express": "^5.0.6",
+        "@types/multer": "^2.1.0",
+        "@types/node": "^26.0.1",
+        "@types/nodemailer": "^8.0.1",
+        "pino-pretty": "^13.1.3",
+        "typescript": "^6.0.3"
+    }
+}
