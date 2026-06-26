@@ -4,6 +4,10 @@ import { stringify } from "csv-stringify/sync";
 import { ZodError, z, type ZodType } from "zod";
 import { ValidationError } from "../http/errors";
 
+function normalizeCsvHeader(header: string): string {
+    return header.trim().toLowerCase();
+}
+
 /**
  * Reads a CSV file into rows validated by the caller-provided row schema.
  */
@@ -13,7 +17,7 @@ export async function readCsvRows<Row>(
 ): Promise<readonly Row[]> {
     const content = await readFile(filePath, "utf8");
     const parsed: unknown = parse(content, {
-        columns: true,
+        columns: (headers: string[]) => headers.map(normalizeCsvHeader),
         skip_empty_lines: true,
         trim: true,
     });
