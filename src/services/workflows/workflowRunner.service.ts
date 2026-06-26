@@ -8,8 +8,9 @@ import { runSummaryReport } from "./summaryReport.service";
 import { sendPlantHeadReport, sendVendorEmails } from "./workflowEmails.service";
 import type {
     RuntimeWorkflowSecrets,
+    WorkflowArtifact,
     WorkflowJob,
-    WorkflowStep,
+    WorkflowRunningStep,
 } from "../../types/workflows.types";
 
 type WorkflowRunnerDeps = {
@@ -30,9 +31,9 @@ export async function runWorkflow(
     jobId: string,
     secrets: RuntimeWorkflowSecrets,
 ): Promise<void> {
-    let job = await setStep(deps, jobId, "uploads_saved", 5);
+    let job = await advance(deps, jobId, "uploads_saved", 5);
     try {
-        job = await setStep(deps, job.id, "log_analysis", 20);
+        job = await advance(deps, job.id, "log_analysis", 20);
         const agent1 = await runLogAnalysis({
             artifactsDir: deps.artifactsDir,
             errorManualPath: job.uploadPaths.errorManual,
@@ -40,7 +41,7 @@ export async function runWorkflow(
             workflowId: job.id,
         });
 
-        job = await setStep(deps, job.id, "purchase_orders", 45);
+        job = await advance(deps, job.id, "purchase_orders", 45);
         const purchaseOrders = await runPurchaseOrders({
             artifactsDir: deps.artifactsDir,
             vendorCatalogPath: job.uploadPaths.vendorCatalog,
@@ -48,7 +49,7 @@ export async function runWorkflow(
             workflowId: job.id,
         });
 
-        job = await setStep(deps, job.id, "vendor_emails", 65);
+        job = await advance(deps, job.id, "vendor_emails", 65);
         const emailResult = await sendVendorEmails({
             emailService: deps.emailService,
             invoiceFiles: purchaseOrders.invoiceFiles,
@@ -57,11 +58,12 @@ export async function runWorkflow(
             senderPassword: secrets.senderPassword,
             vendorEmailList: job.vendorEmailList,
         });
-        job = await updateJob(deps, job, {
+        job = await deps.workflowsRepository.update({
+            ...job,
             resolvedVendorEmails: emailResult.resolvedVendorEmails,
         });
 
-        job = await setStep(deps, job.id, "summary_report", 85);
+        job = await advance(deps, job.id, "summary_report", 85);
         const summary = await runSummaryReport({
             artifactsDir: deps.artifactsDir,
             reportService: deps.reportService,
@@ -70,15 +72,15 @@ export async function runWorkflow(
             errorPartVendorRows: purchaseOrders.errorPartVendorRows,
             emailStatus: emailResult.emailStatus,
         });
-        const artifacts = [
+        const artifacts: WorkflowArtifact[] = [
             agent1.artifact,
             ...purchaseOrders.artifacts,
             summary.tabularArtifact,
             summary.textArtifact,
         ];
-        job = await updateJob(deps, job, { artifacts });
+        job = await deps.workflowsRepository.update({ ...job, artifacts });
 
-        job = await setStep(deps, job.id, "plant_head_email", 95);
+        job = await advance(deps, job.id, "plant_head_email", 95);
         await sendPlantHeadReport({
             emailService: deps.emailService,
             senderEmail: job.senderEmail,
@@ -87,59 +89,73 @@ export async function runWorkflow(
             textReportPath: summary.textSummaryPath,
         });
 
-        await updateJob(deps, job, {
-            status: "succeeded",
-            currentStep: "completed",
-            progress: 100,
-            artifacts,
-            error: null,
-            completedAt: new Date().toISOString(),
-        });
+        await markSucceeded(deps, job, artifacts);
     } catch (err) {
         const message = err instanceof Error ? err.message : "Workflow failed";
         logger.error({ err, workflowId: jobId }, "Workflow execution failed");
-        const latest = await deps.workflowsRepository.get(jobId);
-        await updateJob(deps, latest, {
-            status: "failed",
-            currentStep: "failed",
-            error: message,
-            completedAt: new Date().toISOString(),
-        });
+        await markFailed(deps, jobId, message);
     }
 }
 
-async function updateJob(
-    deps: WorkflowRunnerDeps,
-    current: WorkflowJob,
-    patch: Partial<
-        Pick<
-            WorkflowJob,
-            | "status"
-            | "currentStep"
-            | "progress"
-            | "artifacts"
-            | "resolvedVendorEmails"
-            | "error"
-            | "completedAt"
-        >
-    >,
-): Promise<WorkflowJob> {
-    return deps.workflowsRepository.update({
-        ...current,
-        ...patch,
-    });
-}
-
-async function setStep(
+/**
+ * Advances a persisted job to a running step.
+ *
+ * The latest job is re-read before each transition so updates written between
+ * steps are not lost.
+ */
+async function advance(
     deps: WorkflowRunnerDeps,
     jobId: string,
-    step: WorkflowStep,
+    step: WorkflowRunningStep,
     progress: number,
 ): Promise<WorkflowJob> {
-    const job = await deps.workflowsRepository.get(jobId);
-    return updateJob(deps, job, {
+    const current = await deps.workflowsRepository.get(jobId);
+    const next: WorkflowJob = {
+        ...current,
         status: "running",
         currentStep: step,
         progress,
-    });
+        error: null,
+        completedAt: null,
+    };
+    return deps.workflowsRepository.update(next);
+}
+
+/**
+ * Marks a workflow job as successfully completed.
+ */
+async function markSucceeded(
+    deps: WorkflowRunnerDeps,
+    current: WorkflowJob,
+    artifacts: WorkflowArtifact[],
+): Promise<WorkflowJob> {
+    const next: WorkflowJob = {
+        ...current,
+        status: "succeeded",
+        currentStep: "completed",
+        progress: 100,
+        artifacts,
+        error: null,
+        completedAt: new Date().toISOString(),
+    };
+    return deps.workflowsRepository.update(next);
+}
+
+/**
+ * Marks a workflow job as failed while preserving the latest persisted fields.
+ */
+async function markFailed(
+    deps: WorkflowRunnerDeps,
+    jobId: string,
+    message: string,
+): Promise<WorkflowJob> {
+    const current = await deps.workflowsRepository.get(jobId);
+    const next: WorkflowJob = {
+        ...current,
+        status: "failed",
+        currentStep: "failed",
+        error: message,
+        completedAt: new Date().toISOString(),
+    };
+    return deps.workflowsRepository.update(next);
 }

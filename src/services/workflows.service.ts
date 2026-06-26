@@ -152,7 +152,16 @@ function assertArtifactPath(
 ): void {
     const workflowArtifactDir = path.resolve(artifactsDir, workflowId);
     const resolvedArtifactPath = path.resolve(artifactPath);
-    if (!resolvedArtifactPath.startsWith(workflowArtifactDir)) {
+    const relativePath = path.relative(
+        workflowArtifactDir,
+        resolvedArtifactPath,
+    );
+    if (
+        relativePath === "" ||
+        relativePath === ".." ||
+        relativePath.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relativePath)
+    ) {
         throw new BadRequestError("Invalid artifact path");
     }
 }
