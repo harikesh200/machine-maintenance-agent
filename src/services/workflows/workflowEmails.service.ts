@@ -65,29 +65,29 @@ export async function sendVendorEmails(input: {
 }
 
 /**
- * Sends the final text summary report to the plant-head recipient.
+ * Sends the final executive PDF report to the plant-head recipient.
  */
 export async function sendPlantHeadReport(input: {
     readonly emailService: EmailService;
     readonly senderEmail: string;
     readonly senderPassword: string;
     readonly plantHeadEmail: string;
-    readonly textReportPath: string;
+    readonly reportPath: string;
 }): Promise<void> {
     try {
         await input.emailService.send({
             senderEmail: input.senderEmail,
             senderPassword: input.senderPassword,
             toEmail: input.plantHeadEmail,
-            subject: "Plant Maintenance Summary Report",
+            subject: "Plant Maintenance Executive Report",
             body:
                 "Dear Sir/Madam,\n\n" +
-                "Please find attached the latest maintenance summary report for the plant.\n\n" +
+                "Please find attached the latest plant maintenance executive report.\n\n" +
                 "Regards,\nMaintenance Automation System",
             attachment: {
-                filename: path.basename(input.textReportPath),
-                path: input.textReportPath,
-                contentType: "text/plain",
+                filename: path.basename(input.reportPath),
+                path: input.reportPath,
+                contentType: "application/pdf",
             },
         });
     } catch (err) {

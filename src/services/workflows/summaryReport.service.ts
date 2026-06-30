@@ -1,4 +1,3 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ReportService } from "../openai-report.service";
 import { writeCsv } from "../../utils/csvFiles";
@@ -8,13 +7,18 @@ import type {
     SummaryRow,
 } from "../../types/workflows.domain";
 import type { WorkflowArtifact } from "../../types/workflows.types";
+import {
+    writeExecutiveReportPdf,
+    type ExecutivePriorityIssue,
+    type ExecutiveVendorPosition,
+} from "./executiveReportPdf.service";
 
 /**
- * Builds both summary artifacts for a completed workflow.
+ * Builds the tabular summary and plant-head executive PDF.
  *
- * The tabular report is the source-of-record CSV. The text report is generated
- * from bounded aggregates so the model summarizes evidence instead of seeing
- * raw workflow rows.
+ * The tabular report remains the source of record. OpenAI writes bounded
+ * narrative sections while application code owns PDF layout and factual
+ * tables.
  */
 export async function runSummaryReport(input: {
     readonly artifactsDir: string;
@@ -25,9 +29,9 @@ export async function runSummaryReport(input: {
     readonly emailStatus: Readonly<Record<string, string>>;
 }): Promise<{
     readonly tabularSummaryPath: string;
-    readonly textSummaryPath: string;
+    readonly executiveReportPath: string;
     readonly tabularArtifact: WorkflowArtifact;
-    readonly textArtifact: WorkflowArtifact;
+    readonly executiveReportArtifact: WorkflowArtifact;
 }> {
     const summaryRows = buildSummaryRows(
         input.agent1Rows,
@@ -43,12 +47,13 @@ export async function runSummaryReport(input: {
     );
     await writeCsv(tabularSummaryPath, summaryRows);
 
-    const report = await input.reportService.generateSummary({
+    const analysisPeriod = summarizeTimeRange(input.agent1Rows);
+    const reportContent = await input.reportService.generateSummary({
         findingCount: input.agent1Rows.length,
         unmatchedFindingCount: summaryRows.filter(
             (row) => row.vendor.length === 0,
         ).length,
-        analysisPeriod: summarizeTimeRange(input.agent1Rows),
+        analysisPeriod,
         severityProfile: summarizeCounts(
             input.agent1Rows.map((row) => row.severity),
         ),
@@ -70,27 +75,169 @@ export async function runSummaryReport(input: {
                 .join(", ") || "No purchase orders generated",
     });
 
-    const textSummaryPath = path.join(
+    const executiveReportPath = path.join(
         input.artifactsDir,
         input.workflowId,
-        "text_summary_report.txt",
+        "executive_report.pdf",
     );
-    await writeFile(textSummaryPath, report, "utf8");
+    const generatedAt = new Date().toISOString();
+    await writeExecutiveReportPdf({
+        outputPath: executiveReportPath,
+        workflowId: input.workflowId,
+        analysisPeriod,
+        generatedAt,
+        findingCount: input.agent1Rows.length,
+        highSeverityCount: input.agent1Rows.filter(
+            (row) => row.severity.toLowerCase() === "high",
+        ).length,
+        unmatchedFindingCount: summaryRows.filter(
+            (row) => row.vendor.length === 0,
+        ).length,
+        purchaseOrderVendorCount: Object.keys(input.emailStatus).length,
+        priorityIssues: buildPriorityIssues(input.agent1Rows),
+        vendorPositions: buildVendorPositions(
+            summaryRows,
+            input.emailStatus,
+        ),
+        content: reportContent,
+    });
 
     return {
         tabularSummaryPath,
-        textSummaryPath,
+        executiveReportPath,
         tabularArtifact: {
             name: "tabular-summary",
             path: tabularSummaryPath,
             contentType: "text/csv",
         },
-        textArtifact: {
-            name: "text-summary",
-            path: textSummaryPath,
-            contentType: "text/plain",
+        executiveReportArtifact: {
+            name: "executive-report",
+            path: executiveReportPath,
+            contentType: "application/pdf",
         },
     };
+}
+
+/**
+ * Returns the three highest-severity recurring maintenance combinations.
+ */
+function buildPriorityIssues(
+    rows: readonly Agent1OutputRow[],
+): ExecutivePriorityIssue[] {
+    const issues = new Map<
+        string,
+        { issue: ExecutivePriorityIssue; count: number }
+    >();
+
+    for (const row of rows) {
+        const key = [
+            row.machine_id,
+            row.error_code,
+            row.severity,
+            row.part_name,
+        ].join("\u0000");
+        const current = issues.get(key);
+        if (current) {
+            current.count += 1;
+            continue;
+        }
+        issues.set(key, {
+            issue: {
+                asset: `${row.machine_name} (${row.machine_id})`,
+                errorCode: row.error_code,
+                severity: row.severity,
+                part: row.part_name,
+                findingCount: 1,
+            },
+            count: 1,
+        });
+    }
+
+    return Array.from(issues.values())
+        .sort(
+            (left, right) =>
+                severityRank(right.issue.severity) -
+                    severityRank(left.issue.severity) ||
+                right.count - left.count ||
+                left.issue.asset.localeCompare(right.issue.asset),
+        )
+        .slice(0, 3)
+        .map(({ issue, count }) => ({ ...issue, findingCount: count }));
+}
+
+/**
+ * Aggregates the highest-value purchase-order vendors for the PDF table.
+ */
+function buildVendorPositions(
+    rows: readonly SummaryRow[],
+    emailStatus: Readonly<Record<string, string>>,
+): ExecutiveVendorPosition[] {
+    const vendors = new Map<
+        string,
+        { amountInr: number; deliveryTimes: Set<string> }
+    >();
+
+    for (const row of rows) {
+        if (row.vendor.length === 0 || row.price.length === 0) {
+            continue;
+        }
+        const price = Number(row.price);
+        if (!Number.isFinite(price)) {
+            continue;
+        }
+        const current = vendors.get(row.vendor) ?? {
+            amountInr: 0,
+            deliveryTimes: new Set<string>(),
+        };
+        current.amountInr += price;
+        if (row.delivery_time.length > 0) {
+            current.deliveryTimes.add(row.delivery_time);
+        }
+        vendors.set(row.vendor, current);
+    }
+
+    return Array.from(vendors.entries())
+        .map(([vendor, position]) => ({
+            vendor,
+            amountInr: position.amountInr,
+            deliveryTime:
+                Array.from(position.deliveryTimes).sort().join(", ") ||
+                "Not available",
+            deliveryStatus: formatDeliveryStatus(emailStatus[vendor]),
+        }))
+        .sort(
+            (left, right) =>
+                right.amountInr - left.amountInr ||
+                left.vendor.localeCompare(right.vendor),
+        )
+        .slice(0, 5);
+}
+
+function severityRank(severity: string): number {
+    const normalized = severity.toLowerCase();
+    if (normalized === "high") {
+        return 3;
+    }
+    if (normalized === "medium") {
+        return 2;
+    }
+    if (normalized === "low") {
+        return 1;
+    }
+    return 0;
+}
+
+function formatDeliveryStatus(status: string | undefined): string {
+    if (status === "sent") {
+        return "Delivered";
+    }
+    if (status === "no_email_configured") {
+        return "Recipient not configured";
+    }
+    if (status === "failed") {
+        return "Delivery failed";
+    }
+    return "Not generated";
 }
 
 /**
@@ -212,7 +359,7 @@ function summarizeVendorCosts(rows: readonly SummaryRow[]): string {
 }
 
 /**
- * Returns the analyzed log timestamp range used in the text report.
+ * Returns the analyzed log timestamp range used in the executive report.
  */
 function summarizeTimeRange(rows: readonly Agent1OutputRow[]): string {
     const timestamps = rows

@@ -76,7 +76,7 @@ export async function runWorkflow(
             agent1.artifact,
             ...purchaseOrders.artifacts,
             summary.tabularArtifact,
-            summary.textArtifact,
+            summary.executiveReportArtifact,
         ];
         job = await deps.workflowsRepository.update({ ...job, artifacts });
 
@@ -86,7 +86,7 @@ export async function runWorkflow(
             senderEmail: job.senderEmail,
             senderPassword: secrets.senderPassword,
             plantHeadEmail: job.plantHeadEmail,
-            textReportPath: summary.textSummaryPath,
+            reportPath: summary.executiveReportPath,
         });
 
         await markSucceeded(deps, job, artifacts);

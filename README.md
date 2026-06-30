@@ -8,8 +8,9 @@ Express. The service converts the workflow from
 2. matches recommended replacement parts to a vendor catalog;
 3. creates one purchase-order CSV per matched vendor;
 4. sends purchase orders through Gmail SMTP;
-5. generates a plant-level summary with OpenAI; and
-6. emails the final text report to the plant head.
+5. generates executive narrative with OpenAI;
+6. renders a two-page plant-head PDF; and
+7. emails the executive report to the plant head.
 
 Workflow state is persisted locally as JSON, and generated reports remain
 available through artifact download endpoints.
@@ -70,7 +71,7 @@ Configuration is loaded from `.env` and validated when the process starts.
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | Yes | — | API key used to generate the text summary |
+| `OPENAI_API_KEY` | Yes | — | API key used to generate executive-report narrative |
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI model passed to the Responses API |
 | `PORT` | No | `3000` | HTTP server port |
 | `NODE_ENV` | No | `development` | `development`, `test`, or `production` |
@@ -258,12 +259,12 @@ Artifact names are returned by the status endpoint:
 | `agent1-output` | Analyzed maintenance findings CSV |
 | `invoice-<vendor>` | Aggregated purchase-order CSV for one vendor |
 | `tabular-summary` | Full workflow summary CSV |
-| `text-summary` | OpenAI-generated leadership report |
+| `executive-report` | Two-page plant-head PDF with narrative, priorities, vendor position, and management actions |
 
-The text report is written as a plant-head executive brief with an overview,
-maintenance assessment, procurement and delivery position, management
-actions, and conclusion. Email outcomes are counted once per purchase-order
-vendor rather than once per duplicated summary row.
+OpenAI generates bounded narrative sections; application code owns the PDF
+layout, factual tables, colors, pagination, and metadata. Email outcomes are
+counted once per purchase-order vendor rather than once per duplicated summary
+row.
 
 Vendor segments in artifact names are sanitized to letters, numbers,
 underscores, and hyphens.
