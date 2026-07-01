@@ -11,7 +11,7 @@ export function cleanPartName(name: string): string {
 }
 
 /**
- * Converts user/vendor-controlled text into a safe artifact file-name segment.
+ * Converts a vendor name into a safe invoice attachment filename segment.
  */
 export function safeFilePart(value: string): string {
     const safe = value.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");

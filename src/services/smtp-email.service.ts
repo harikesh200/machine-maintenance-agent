@@ -2,11 +2,11 @@ import { createTransport } from "nodemailer";
 import { UpstreamError } from "../http/errors";
 
 /**
- * File attachment sent with an SMTP message.
+ * In-memory attachment sent with an SMTP message.
  */
 export type EmailAttachment = {
     readonly filename: string;
-    readonly path: string;
+    readonly content: Buffer;
     readonly contentType: string;
 };
 
@@ -52,7 +52,7 @@ export function createSmtpEmailService() {
                     attachments: [
                         {
                             filename: input.attachment.filename,
-                            path: input.attachment.path,
+                            content: input.attachment.content,
                             contentType: input.attachment.contentType,
                         },
                     ],

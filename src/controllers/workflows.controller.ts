@@ -1,6 +1,5 @@
-import path from "node:path";
 import type { RequestHandler } from "express";
-import { BadRequestError, NotFoundError } from "../http/errors";
+import { BadRequestError } from "../http/errors";
 import type { CreateWorkflowBody } from "../schemas/workflows.schema";
 import type { UploadedWorkflowFiles } from "../types/workflows.types";
 import type { WorkflowsService } from "../services/workflows.service";
@@ -17,9 +16,9 @@ function isUploadedFile(file: unknown): file is Express.Multer.File {
     return (
         file !== null &&
         typeof file === "object" &&
-        "path" in file &&
-        typeof file.path === "string" &&
-        file.path.length > 0
+        "buffer" in file &&
+        Buffer.isBuffer(file.buffer) &&
+        file.buffer.length > 0
     );
 }
 
@@ -49,7 +48,11 @@ function pickUploadedFiles(files: unknown): UploadedWorkflowFiles {
         );
     }
 
-    return { machineLogs, errorManual, vendorCatalog };
+    return {
+        machineLogs: machineLogs.buffer,
+        errorManual: errorManual.buffer,
+        vendorCatalog: vendorCatalog.buffer,
+    };
 }
 
 function requiredParam(value: string | string[] | undefined, name: string): string {
@@ -60,7 +63,7 @@ function requiredParam(value: string | string[] | undefined, name: string): stri
 }
 
 /**
- * Creates HTTP handlers for workflow creation, lookup, and artifact download.
+ * Creates HTTP handlers for workflow creation and status lookup.
  */
 export function makeWorkflowsController(service: WorkflowsService) {
     const create: RequestHandler<
@@ -95,17 +98,5 @@ export function makeWorkflowsController(service: WorkflowsService) {
         res.json({ data: service.toPublicJob(job) });
     };
 
-    const downloadArtifact: RequestHandler = async (req, res) => {
-        const artifact = await service.getArtifact(
-            requiredParam(req.params.id, "id"),
-            requiredParam(req.params.name, "name"),
-        );
-        if (!path.isAbsolute(artifact.path)) {
-            throw new NotFoundError("Artifact");
-        }
-        res.type(artifact.contentType);
-        res.download(artifact.path, path.basename(artifact.path));
-    };
-
-    return { create, get, downloadArtifact };
+    return { create, get };
 }

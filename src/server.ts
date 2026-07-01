@@ -1,28 +1,20 @@
-import { mkdir } from "node:fs/promises";
-import { artifactsDir, jobsDir, uploadsDir } from "./config/paths";
 import { buildApp } from "./app";
 import { config } from "./config/env";
 import { logger } from "./logger";
 import { createOpenAiReportService } from "./services/openai-report.service";
 import { createSmtpEmailService } from "./services/smtp-email.service";
-import { createLocalWorkflowRepository } from "./repositories/localWorkflow.repository";
+import { createMemoryWorkflowRepository } from "./repositories/memoryWorkflow.repository";
 import { createWorkflowsService } from "./services/workflows.service";
 
-await Promise.all([
-    mkdir(uploadsDir, { recursive: true }),
-    mkdir(artifactsDir, { recursive: true }),
-    mkdir(jobsDir, { recursive: true }),
-]);
-
-const workflowsRepository = createLocalWorkflowRepository({ jobsDir });
+const workflowsRepository = createMemoryWorkflowRepository({
+    terminalRetentionMs: config.JOB_RETENTION_MS,
+});
 const reportService = createOpenAiReportService({
     apiKey: config.OPENAI_API_KEY,
     model: config.OPENAI_MODEL,
 });
 const emailService = createSmtpEmailService();
 const workflowsService = createWorkflowsService({
-    artifactsDir,
-    uploadsDir,
     workflowsRepository,
     reportService,
     emailService,

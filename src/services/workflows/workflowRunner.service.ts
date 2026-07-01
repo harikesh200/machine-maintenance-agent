@@ -1,61 +1,52 @@
 import { logger } from "../../logger";
-import type { EmailService } from "../smtp-email.service";
+import type { WorkflowsRepository } from "../../repositories/memoryWorkflow.repository";
+import type {
+    RuntimeWorkflowInput,
+    WorkflowJob,
+    WorkflowRunningStep,
+} from "../../types/workflows.types";
 import type { ReportService } from "../openai-report.service";
-import type { WorkflowsRepository } from "../../repositories/localWorkflow.repository";
+import type { EmailService } from "../smtp-email.service";
 import { runLogAnalysis } from "./logAnalysis.service";
 import { runPurchaseOrders } from "./purchaseOrders.service";
 import { runSummaryReport } from "./summaryReport.service";
 import { sendPlantHeadReport, sendVendorEmails } from "./workflowEmails.service";
-import type {
-    RuntimeWorkflowSecrets,
-    WorkflowArtifact,
-    WorkflowJob,
-    WorkflowRunningStep,
-} from "../../types/workflows.types";
 
 type WorkflowRunnerDeps = {
-    readonly artifactsDir: string;
     readonly workflowsRepository: WorkflowsRepository;
     readonly reportService: ReportService;
     readonly emailService: EmailService;
 };
 
 /**
- * Executes the asynchronous workflow pipeline for a persisted job.
- *
- * The runner updates job progress between stages and marks the job failed if
- * any stage throws.
+ * Executes the asynchronous workflow entirely in memory.
  */
 export async function runWorkflow(
     deps: WorkflowRunnerDeps,
     jobId: string,
-    secrets: RuntimeWorkflowSecrets,
+    runtime: RuntimeWorkflowInput,
 ): Promise<void> {
     let job = await advance(deps, jobId, "uploads_saved", 5);
     try {
         job = await advance(deps, job.id, "log_analysis", 20);
-        const agent1 = await runLogAnalysis({
-            artifactsDir: deps.artifactsDir,
-            errorManualPath: job.uploadPaths.errorManual,
-            machineLogsPath: job.uploadPaths.machineLogs,
-            workflowId: job.id,
+        const agent1Rows = await runLogAnalysis({
+            errorManual: runtime.files.errorManual,
+            machineLogs: runtime.files.machineLogs,
         });
 
         job = await advance(deps, job.id, "purchase_orders", 45);
-        const purchaseOrders = await runPurchaseOrders({
-            artifactsDir: deps.artifactsDir,
-            vendorCatalogPath: job.uploadPaths.vendorCatalog,
-            agent1Rows: agent1.rows,
-            workflowId: job.id,
+        const purchaseOrders = runPurchaseOrders({
+            vendorCatalog: runtime.files.vendorCatalog,
+            agent1Rows,
         });
 
         job = await advance(deps, job.id, "vendor_emails", 65);
         const emailResult = await sendVendorEmails({
             emailService: deps.emailService,
-            invoiceFiles: purchaseOrders.invoiceFiles,
+            invoices: purchaseOrders.invoices,
             invoiceVendors: purchaseOrders.invoiceVendors,
             senderEmail: job.senderEmail,
-            senderPassword: secrets.senderPassword,
+            senderPassword: runtime.senderPassword,
             vendorEmailList: job.vendorEmailList,
         });
         job = await deps.workflowsRepository.update({
@@ -64,32 +55,24 @@ export async function runWorkflow(
         });
 
         job = await advance(deps, job.id, "summary_report", 85);
-        const summary = await runSummaryReport({
-            artifactsDir: deps.artifactsDir,
+        const executiveReport = await runSummaryReport({
             reportService: deps.reportService,
             workflowId: job.id,
-            agent1Rows: agent1.rows,
+            agent1Rows,
             errorPartVendorRows: purchaseOrders.errorPartVendorRows,
             emailStatus: emailResult.emailStatus,
         });
-        const artifacts: WorkflowArtifact[] = [
-            agent1.artifact,
-            ...purchaseOrders.artifacts,
-            summary.tabularArtifact,
-            summary.executiveReportArtifact,
-        ];
-        job = await deps.workflowsRepository.update({ ...job, artifacts });
 
         job = await advance(deps, job.id, "plant_head_email", 95);
         await sendPlantHeadReport({
             emailService: deps.emailService,
             senderEmail: job.senderEmail,
-            senderPassword: secrets.senderPassword,
+            senderPassword: runtime.senderPassword,
             plantHeadEmail: job.plantHeadEmail,
-            reportPath: summary.executiveReportPath,
+            report: executiveReport,
         });
 
-        await markSucceeded(deps, job, artifacts);
+        await markSucceeded(deps, job);
     } catch (err) {
         const message = err instanceof Error ? err.message : "Workflow failed";
         logger.error({ err, workflowId: jobId }, "Workflow execution failed");
@@ -97,12 +80,6 @@ export async function runWorkflow(
     }
 }
 
-/**
- * Advances a persisted job to a running step.
- *
- * The latest job is re-read before each transition so updates written between
- * steps are not lost.
- */
 async function advance(
     deps: WorkflowRunnerDeps,
     jobId: string,
@@ -121,29 +98,21 @@ async function advance(
     return deps.workflowsRepository.update(next);
 }
 
-/**
- * Marks a workflow job as successfully completed.
- */
 async function markSucceeded(
     deps: WorkflowRunnerDeps,
     current: WorkflowJob,
-    artifacts: WorkflowArtifact[],
 ): Promise<WorkflowJob> {
     const next: WorkflowJob = {
         ...current,
         status: "succeeded",
         currentStep: "completed",
         progress: 100,
-        artifacts,
         error: null,
         completedAt: new Date().toISOString(),
     };
     return deps.workflowsRepository.update(next);
 }
 
-/**
- * Marks a workflow job as failed while preserving the latest persisted fields.
- */
 async function markFailed(
     deps: WorkflowRunnerDeps,
     jobId: string,

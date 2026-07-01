@@ -14,6 +14,11 @@ const envSchema = z.object({
         .default("http://localhost:5173,http://localhost:3000"),
     OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
     OPENAI_MODEL: z.string().min(1).default("gpt-4o"),
+    JOB_RETENTION_MS: z.coerce
+        .number()
+        .int()
+        .min(60_000)
+        .default(30 * 60 * 1_000),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -1,12 +1,10 @@
-import path from "node:path";
 import * as z from "zod";
-import { readCsvRows, writeCsv } from "../../utils/csvFiles";
+import { createCsvBuffer, parseCsvRows } from "../../utils/csvFiles";
 import type {
     Agent1OutputRow,
     ErrorPartVendorRow,
     InvoiceLine,
 } from "../../types/workflows.domain";
-import type { WorkflowArtifact } from "../../types/workflows.types";
 import { cleanPartName, groupBy, safeFilePart } from "../../utils/workflowUtils";
 
 const vendorCatalogRowSchema = z.object({
@@ -26,42 +24,42 @@ const vendorCatalogRowSchema = z.object({
     }),
 });
 
+export type GeneratedInvoice = {
+    readonly filename: string;
+    readonly content: Buffer;
+};
+
 /**
- * Matches recommended parts to vendors and writes one invoice artifact per
- * matched vendor.
+ * Matches recommended parts to vendors and builds invoice CSV buffers.
  */
-export async function runPurchaseOrders(input: {
-    readonly artifactsDir: string;
-    readonly vendorCatalogPath: string;
+export function runPurchaseOrders(input: {
+    readonly vendorCatalog: Buffer;
     readonly agent1Rows: readonly Agent1OutputRow[];
-    readonly workflowId: string;
-}): Promise<{
+}): {
     readonly errorPartVendorRows: readonly ErrorPartVendorRow[];
-    readonly invoiceFiles: ReadonlyMap<string, string>;
     readonly invoiceVendors: readonly string[];
-    readonly artifacts: readonly WorkflowArtifact[];
-}> {
-    const vendorCatalog = await readCsvRows(
-        input.vendorCatalogPath,
+    readonly invoices: ReadonlyMap<string, GeneratedInvoice>;
+} {
+    const vendorCatalog = parseCsvRows(
+        input.vendorCatalog,
         vendorCatalogRowSchema,
     );
-    const vendorsByPart = new Map<string, ErrorPartVendorRow[]>();
+    const vendorsByPart = new Map<
+        string,
+        {
+            readonly vendor: string;
+            readonly price: number;
+            readonly delivery_time: string;
+        }[]
+    >();
 
     for (const vendorRow of vendorCatalog) {
         const partName = cleanPartName(vendorRow.part_name);
-        const vendor = vendorRow.vendor;
-        const deliveryTime = vendorRow.delivery_time;
         const rows = vendorsByPart.get(partName) ?? [];
         rows.push({
-            timestamp: "",
-            machine_id: "",
-            machine_name: "",
-            error_code: "",
-            severity: "",
-            part_name: partName,
-            vendor,
+            vendor: vendorRow.vendor,
             price: vendorRow.price,
-            delivery_time: deliveryTime,
+            delivery_time: vendorRow.delivery_time,
         });
         vendorsByPart.set(partName, rows);
     }
@@ -83,8 +81,7 @@ export async function runPurchaseOrders(input: {
     const invoiceVendors = Array.from(
         new Set(errorPartVendorRows.map((row) => row.vendor)),
     ).sort((left, right) => left.localeCompare(right));
-    const invoiceFiles = new Map<string, string>();
-    const artifacts: WorkflowArtifact[] = [];
+    const invoices = new Map<string, GeneratedInvoice>();
 
     for (const vendor of invoiceVendors) {
         const vendorRows = errorPartVendorRows.filter(
@@ -118,19 +115,11 @@ export async function runPurchaseOrders(input: {
             ...line,
             total_vendor_cost: totalVendorCost,
         }));
-        const invoicePath = path.join(
-            input.artifactsDir,
-            input.workflowId,
-            `invoice_${safeFilePart(vendor)}.csv`,
-        );
-        await writeCsv(invoicePath, finalizedLines);
-        invoiceFiles.set(vendor, invoicePath);
-        artifacts.push({
-            name: `invoice-${safeFilePart(vendor)}`,
-            path: invoicePath,
-            contentType: "text/csv",
+        invoices.set(vendor, {
+            filename: `invoice_${safeFilePart(vendor)}.csv`,
+            content: createCsvBuffer(finalizedLines),
         });
     }
 
-    return { errorPartVendorRows, invoiceFiles, invoiceVendors, artifacts };
+    return { errorPartVendorRows, invoiceVendors, invoices };
 }

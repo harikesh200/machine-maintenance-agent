@@ -1,5 +1,3 @@
-import { createWriteStream } from "node:fs";
-import { rename, rm } from "node:fs/promises";
 import PDFDocument from "pdfkit";
 import type { ExecutiveReportContent } from "../openai-report.service";
 
@@ -33,7 +31,6 @@ export type ExecutiveVendorPosition = {
 };
 
 export type ExecutiveReportPdfInput = {
-    readonly outputPath: string;
     readonly workflowId: string;
     readonly analysisPeriod: string;
     readonly generatedAt: string;
@@ -47,26 +44,12 @@ export type ExecutiveReportPdfInput = {
 };
 
 /**
- * Writes a deterministic two-page A4 executive maintenance report.
+ * Generates a deterministic two-page A4 executive report in memory.
  */
-export async function writeExecutiveReportPdf(
+export async function generateExecutiveReportPdf(
     input: ExecutiveReportPdfInput,
-): Promise<void> {
-    const temporaryPath = `${input.outputPath}.tmp`;
-    try {
-        await renderPdfToPath(input, temporaryPath);
-        await rename(temporaryPath, input.outputPath);
-    } catch (err) {
-        await rm(temporaryPath, { force: true });
-        throw err;
-    }
-}
-
-async function renderPdfToPath(
-    input: ExecutiveReportPdfInput,
-    outputPath: string,
-): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
+): Promise<Buffer> {
+    return new Promise<Buffer>((resolve, reject) => {
         const document = new PDFDocument({
             size: "A4",
             margins: { top: 42, right: 46, bottom: 42, left: 46 },
@@ -77,12 +60,15 @@ async function renderPdfToPath(
                 Subject: `Workflow ${input.workflowId}`,
             },
         });
-        const output = createWriteStream(outputPath);
+        const chunks: Buffer[] = [];
 
         document.once("error", reject);
-        output.once("error", reject);
-        output.once("finish", resolve);
-        document.pipe(output);
+        document.on("data", (chunk: Buffer | Uint8Array) => {
+            chunks.push(Buffer.from(chunk));
+        });
+        document.once("end", () => {
+            resolve(Buffer.concat(chunks));
+        });
 
         try {
             drawFirstPage(document, input);
@@ -94,7 +80,7 @@ async function renderPdfToPath(
             drawPageFooters(document, input.workflowId);
             document.end();
         } catch (err) {
-            output.destroy();
+            document.destroy();
             reject(err);
         }
     });

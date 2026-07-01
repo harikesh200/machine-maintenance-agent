@@ -1,9 +1,7 @@
 node_modules/
 dist/
 .env
-data/uploads/
-data/artifacts/
-data/jobs/
+data/
 *.log
 Machine Logs
 Reference Manual

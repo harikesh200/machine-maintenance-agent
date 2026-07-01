@@ -1,9 +1,7 @@
-import path from "node:path";
 import * as z from "zod";
 import { parseErrorManual } from "./errorManualParser.service";
-import { readCsvRows, writeCsv } from "../../utils/csvFiles";
+import { parseCsvRows } from "../../utils/csvFiles";
 import type { Agent1OutputRow } from "../../types/workflows.domain";
-import type { WorkflowArtifact } from "../../types/workflows.types";
 import { cleanPartName } from "../../utils/workflowUtils";
 
 const machineLogRowSchema = z.object({
@@ -14,20 +12,14 @@ const machineLogRowSchema = z.object({
 });
 
 /**
- * Analyzes machine logs against the parsed error manual and writes the
- * `agent1-output` artifact.
+ * Analyzes in-memory machine logs against the uploaded error manual.
  */
 export async function runLogAnalysis(input: {
-    readonly artifactsDir: string;
-    readonly errorManualPath: string;
-    readonly machineLogsPath: string;
-    readonly workflowId: string;
-}): Promise<{
-    readonly rows: readonly Agent1OutputRow[];
-    readonly artifact: WorkflowArtifact;
-}> {
-    const manual = await parseErrorManual(input.errorManualPath);
-    const logs = await readCsvRows(input.machineLogsPath, machineLogRowSchema);
+    readonly errorManual: Buffer;
+    readonly machineLogs: Buffer;
+}): Promise<readonly Agent1OutputRow[]> {
+    const manual = await parseErrorManual(input.errorManual);
+    const logs = parseCsvRows(input.machineLogs, machineLogRowSchema);
     const rows: Agent1OutputRow[] = [];
 
     for (const logRow of logs) {
@@ -64,18 +56,5 @@ export async function runLogAnalysis(input: {
         }
     }
 
-    const outputPath = path.join(
-        input.artifactsDir,
-        input.workflowId,
-        "agent1_output.csv",
-    );
-    await writeCsv(outputPath, rows);
-    return {
-        rows,
-        artifact: {
-            name: "agent1-output",
-            path: outputPath,
-            contentType: "text/csv",
-        },
-    };
+    return rows;
 }

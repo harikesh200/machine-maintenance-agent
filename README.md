@@ -12,8 +12,9 @@ Express. The service converts the workflow from
 6. renders a two-page plant-head PDF; and
 7. emails the executive report to the plant head.
 
-Workflow state is persisted locally as JSON, and generated reports remain
-available through artifact download endpoints.
+Uploads, intermediate CSVs, invoices, and the executive PDF are processed in
+memory and released after email delivery. Compact job status remains in memory
+for a limited period so the frontend can finish polling.
 
 ## Prerequisites
 
@@ -73,6 +74,7 @@ Configuration is loaded from `.env` and validated when the process starts.
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | Yes | — | API key used to generate executive-report narrative |
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI model passed to the Responses API |
+| `JOB_RETENTION_MS` | No | `1800000` | Time completed and failed job status remains available in memory |
 | `PORT` | No | `3000` | HTTP server port |
 | `NODE_ENV` | No | `development` | `development`, `test`, or `production` |
 | `LOG_LEVEL` | No | `info` | Pino log level |
@@ -183,7 +185,7 @@ curl -X POST http://localhost:3000/v1/workflows \
   -F "plantHeadEmail=plant-head@example.com"
 ```
 
-The API returns `202 Accepted` after persisting the queued job:
+The API returns `202 Accepted` after registering the queued job in memory:
 
 ```json
 {
@@ -202,8 +204,8 @@ The API returns `202 Accepted` after persisting the queued job:
 GET /v1/workflows/:id
 ```
 
-The response contains status, progress, vendor-email mappings, artifact
-metadata, timestamps, and any terminal error:
+The response contains status, progress, vendor-email mappings, timestamps, and
+any terminal error:
 
 ```json
 {
@@ -218,12 +220,6 @@ metadata, timestamps, and any terminal error:
       "VendorA": "vendor-a@example.com"
     },
     "plantHeadEmail": "plant-head@example.com",
-    "artifacts": [
-      {
-        "name": "agent1-output",
-        "contentType": "text/csv"
-      }
-    ],
     "error": null,
     "createdAt": "2026-06-29T10:00:00.000Z",
     "updatedAt": "2026-06-29T10:00:05.000Z",
@@ -246,61 +242,33 @@ Vendor email failures are recorded in the summary but do not stop the
 workflow. A failed OpenAI summary or plant-head email marks the job as
 `failed`.
 
-### Download an Artifact
+## In-Memory Lifecycle
 
-```http
-GET /v1/workflows/:id/artifacts/:name
-```
+- Multer holds the three uploaded files in memory.
+- CSV parsing, invoice generation, and PDF rendering use buffers.
+- Nodemailer sends invoice and executive-report buffers directly.
+- File buffers are released when the workflow finishes.
+- Completed and failed status remains available for `JOB_RETENTION_MS`.
+- The API does not expose artifact download endpoints.
 
-Artifact names are returned by the status endpoint:
-
-| Name | Content |
-| --- | --- |
-| `agent1-output` | Analyzed maintenance findings CSV |
-| `invoice-<vendor>` | Aggregated purchase-order CSV for one vendor |
-| `tabular-summary` | Full workflow summary CSV |
-| `executive-report` | Two-page plant-head PDF with narrative, priorities, vendor position, and management actions |
-
-OpenAI generates bounded narrative sections; application code owns the PDF
-layout, factual tables, colors, pagination, and metadata. Email outcomes are
-counted once per purchase-order vendor rather than once per duplicated summary
-row.
-
-Vendor segments in artifact names are sanitized to letters, numbers,
-underscores, and hyphens.
-
-## Local Storage
-
-Runtime data is created under `data/`:
-
-```text
-data/
-├── uploads/<workflow-id>/      # Saved workflow inputs
-├── artifacts/<workflow-id>/    # Generated CSV and text files
-└── jobs/<workflow-id>.json     # Persisted job state
-```
-
-These paths are excluded from Git. Job records contain email addresses and
-local file paths, but not SMTP passwords.
-
-This repository uses an in-process workflow runner and local filesystem
-storage. It does not resume interrupted jobs after a process restart and is
-not suitable for horizontally scaled deployment without replacing those
-components with shared durable infrastructure.
+No runtime `data/` directory is created or used. Job status and active file
+buffers are lost if the backend process restarts. The in-memory repository is
+intended for a single backend instance; shared durable infrastructure is
+required for horizontal scaling or restart recovery.
 
 ## Project Structure
 
 ```text
 src/
-├── config/          # Validated environment and storage paths
+├── config/          # Validated environment configuration
 ├── controllers/     # HTTP request and response translation
-├── http/            # Validation, errors, request IDs, and upload cleanup
-├── repositories/    # Filesystem-backed workflow persistence
+├── http/            # Validation, errors, and request IDs
+├── repositories/    # Expiring in-memory workflow status
 ├── routes/          # Express route wiring
 ├── schemas/         # Zod request contracts
 ├── services/        # Workflow stages and external service adapters
-├── types/           # Domain and persisted workflow types
-└── utils/           # CSV and workflow helpers
+├── types/           # Domain and workflow-state types
+└── utils/           # In-memory CSV and workflow helpers
 ```
 
 `src/app.ts` composes the Express application, `src/server.ts` creates

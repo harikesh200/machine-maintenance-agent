@@ -38,16 +38,7 @@ export const workflowStepSchema = z.enum([
 ]);
 
 /**
- * Downloadable artifact metadata stored on a workflow job.
- */
-export const workflowArtifactSchema = z.object({
-    name: z.string().min(1),
-    path: z.string().min(1),
-    contentType: z.string().min(1),
-});
-
-/**
- * Persisted workflow job schema used to validate repository reads.
+ * Workflow job schema used to validate in-memory state.
  */
 const workflowJobBaseSchema = z.object({
     id: z.string().min(1),
@@ -55,13 +46,7 @@ const workflowJobBaseSchema = z.object({
     vendorEmailList: z.array(z.email()),
     resolvedVendorEmails: z.record(z.string(), z.email()),
     plantHeadEmail: z.email(),
-    uploadPaths: z.object({
-        machineLogs: z.string().min(1),
-        errorManual: z.string().min(1),
-        vendorCatalog: z.string().min(1),
-    }),
     progress: z.number().int().min(0).max(100),
-    artifacts: z.array(workflowArtifactSchema),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
 });
@@ -123,27 +108,23 @@ export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 export type WorkflowRunningStep = z.infer<typeof workflowRunningStepSchema>;
 
 /**
- * Downloadable artifact metadata stored on a workflow job.
- */
-export type WorkflowArtifact = z.infer<typeof workflowArtifactSchema>;
-
-/**
- * Persisted workflow job state.
+ * In-memory workflow job state.
  */
 export type WorkflowJob = z.infer<typeof workflowJobSchema>;
 
 /**
- * Required multipart files for workflow creation.
+ * Required in-memory file buffers for workflow creation.
  */
 export type UploadedWorkflowFiles = {
-    readonly machineLogs: Express.Multer.File;
-    readonly errorManual: Express.Multer.File;
-    readonly vendorCatalog: Express.Multer.File;
+    readonly machineLogs: Buffer;
+    readonly errorManual: Buffer;
+    readonly vendorCatalog: Buffer;
 };
 
 /**
- * Runtime-only secrets needed by the background workflow runner.
+ * Runtime-only input needed by the background workflow runner.
  */
-export type RuntimeWorkflowSecrets = {
+export type RuntimeWorkflowInput = {
     readonly senderPassword: string;
+    readonly files: UploadedWorkflowFiles;
 };

@@ -37,14 +37,6 @@ export const workflowParamsSchema = z.object({
 });
 
 /**
- * Route parameter schema for artifact download.
- */
-export const artifactParamsSchema = z.object({
-    id: z.string().min(1),
-    name: z.string().min(1),
-});
-
-/**
  * Validated request body for workflow creation.
  */
 export type CreateWorkflowBody = z.infer<typeof createWorkflowBodySchema>;

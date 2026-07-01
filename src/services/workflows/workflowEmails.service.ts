@@ -1,13 +1,13 @@
-import path from "node:path";
 import { logger } from "../../logger";
 import type { EmailService } from "../../services/smtp-email.service";
+import type { GeneratedInvoice } from "./purchaseOrders.service";
 
 /**
- * Sends generated purchase-order invoices to vendors by ordered email mapping.
+ * Sends generated purchase-order invoice buffers to vendors.
  */
 export async function sendVendorEmails(input: {
     readonly emailService: EmailService;
-    readonly invoiceFiles: ReadonlyMap<string, string>;
+    readonly invoices: ReadonlyMap<string, GeneratedInvoice>;
     readonly invoiceVendors: readonly string[];
     readonly senderEmail: string;
     readonly senderPassword: string;
@@ -27,8 +27,8 @@ export async function sendVendorEmails(input: {
     });
 
     for (const vendor of input.invoiceVendors) {
-        const invoicePath = input.invoiceFiles.get(vendor);
-        if (!invoicePath) {
+        const invoice = input.invoices.get(vendor);
+        if (!invoice) {
             continue;
         }
         const toEmail = resolvedVendorEmails[vendor];
@@ -49,8 +49,8 @@ export async function sendVendorEmails(input: {
                     "Kindly confirm availability and expected delivery schedule.\n\n" +
                     `Regards,\n${input.senderEmail}`,
                 attachment: {
-                    filename: path.basename(invoicePath),
-                    path: invoicePath,
+                    filename: invoice.filename,
+                    content: invoice.content,
                     contentType: "text/csv",
                 },
             });
@@ -65,14 +65,14 @@ export async function sendVendorEmails(input: {
 }
 
 /**
- * Sends the final executive PDF report to the plant-head recipient.
+ * Sends the in-memory executive PDF to the plant-head recipient.
  */
 export async function sendPlantHeadReport(input: {
     readonly emailService: EmailService;
     readonly senderEmail: string;
     readonly senderPassword: string;
     readonly plantHeadEmail: string;
-    readonly reportPath: string;
+    readonly report: Buffer;
 }): Promise<void> {
     try {
         await input.emailService.send({
@@ -85,8 +85,8 @@ export async function sendPlantHeadReport(input: {
                 "Please find attached the latest plant maintenance executive report.\n\n" +
                 "Regards,\nMaintenance Automation System",
             attachment: {
-                filename: path.basename(input.reportPath),
-                path: input.reportPath,
+                filename: "executive_report.pdf",
+                content: input.report,
                 contentType: "application/pdf",
             },
         });

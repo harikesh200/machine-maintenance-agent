@@ -1,4 +1,3 @@
-import { readFile, writeFile } from "node:fs/promises";
 import { parse } from "csv-parse/sync";
 import { stringify } from "csv-stringify/sync";
 import { ZodError, z, type ZodType } from "zod";
@@ -9,18 +8,20 @@ function normalizeCsvHeader(header: string): string {
 }
 
 /**
- * Reads a CSV file into rows validated by the caller-provided row schema.
+ * Parses and validates CSV content held in memory.
  */
-export async function readCsvRows<Row>(
-    filePath: string,
+export function parseCsvRows<Row>(
+    content: Buffer | string,
     rowSchema: ZodType<Row>,
-): Promise<readonly Row[]> {
-    const content = await readFile(filePath, "utf8");
-    const parsed: unknown = parse(content, {
-        columns: (headers: string[]) => headers.map(normalizeCsvHeader),
-        skip_empty_lines: true,
-        trim: true,
-    });
+): readonly Row[] {
+    const parsed: unknown = parse(
+        typeof content === "string" ? content : content.toString("utf8"),
+        {
+            columns: (headers: string[]) => headers.map(normalizeCsvHeader),
+            skip_empty_lines: true,
+            trim: true,
+        },
+    );
     try {
         return z.array(rowSchema).parse(parsed);
     } catch (err) {
@@ -35,14 +36,15 @@ export async function readCsvRows<Row>(
 }
 
 /**
- * Writes object rows as a headered CSV file.
+ * Creates a headered CSV attachment buffer.
  */
-export async function writeCsv(
-    filePath: string,
+export function createCsvBuffer(
     rows: readonly Record<string, unknown>[],
-): Promise<void> {
-    const csv = stringify([...rows], {
-        header: true,
-    });
-    await writeFile(filePath, csv, "utf8");
+): Buffer {
+    return Buffer.from(
+        stringify([...rows], {
+            header: true,
+        }),
+        "utf8",
+    );
 }

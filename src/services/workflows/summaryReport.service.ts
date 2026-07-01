@@ -1,51 +1,31 @@
-import path from "node:path";
 import type { ReportService } from "../openai-report.service";
-import { writeCsv } from "../../utils/csvFiles";
 import type {
     Agent1OutputRow,
     ErrorPartVendorRow,
     SummaryRow,
 } from "../../types/workflows.domain";
-import type { WorkflowArtifact } from "../../types/workflows.types";
 import {
-    writeExecutiveReportPdf,
+    generateExecutiveReportPdf,
     type ExecutivePriorityIssue,
     type ExecutiveVendorPosition,
 } from "./executiveReportPdf.service";
 
 /**
- * Builds the tabular summary and plant-head executive PDF.
- *
- * The tabular report remains the source of record. OpenAI writes bounded
- * narrative sections while application code owns PDF layout and factual
- * tables.
+ * Builds the plant-head executive PDF entirely in memory.
  */
 export async function runSummaryReport(input: {
-    readonly artifactsDir: string;
     readonly reportService: ReportService;
     readonly workflowId: string;
     readonly agent1Rows: readonly Agent1OutputRow[];
     readonly errorPartVendorRows: readonly ErrorPartVendorRow[];
     readonly emailStatus: Readonly<Record<string, string>>;
-}): Promise<{
-    readonly tabularSummaryPath: string;
-    readonly executiveReportPath: string;
-    readonly tabularArtifact: WorkflowArtifact;
-    readonly executiveReportArtifact: WorkflowArtifact;
-}> {
+}): Promise<Buffer> {
     const summaryRows = buildSummaryRows(
         input.agent1Rows,
         input.errorPartVendorRows,
         input.emailStatus,
     );
     summaryRows.sort(compareSummaryRows);
-
-    const tabularSummaryPath = path.join(
-        input.artifactsDir,
-        input.workflowId,
-        "tabular_summary_report.csv",
-    );
-    await writeCsv(tabularSummaryPath, summaryRows);
 
     const analysisPeriod = summarizeTimeRange(input.agent1Rows);
     const reportContent = await input.reportService.generateSummary({
@@ -75,14 +55,8 @@ export async function runSummaryReport(input: {
                 .join(", ") || "No purchase orders generated",
     });
 
-    const executiveReportPath = path.join(
-        input.artifactsDir,
-        input.workflowId,
-        "executive_report.pdf",
-    );
     const generatedAt = new Date().toISOString();
-    await writeExecutiveReportPdf({
-        outputPath: executiveReportPath,
+    return generateExecutiveReportPdf({
         workflowId: input.workflowId,
         analysisPeriod,
         generatedAt,
@@ -101,21 +75,6 @@ export async function runSummaryReport(input: {
         ),
         content: reportContent,
     });
-
-    return {
-        tabularSummaryPath,
-        executiveReportPath,
-        tabularArtifact: {
-            name: "tabular-summary",
-            path: tabularSummaryPath,
-            contentType: "text/csv",
-        },
-        executiveReportArtifact: {
-            name: "executive-report",
-            path: executiveReportPath,
-            contentType: "application/pdf",
-        },
-    };
 }
 
 /**
@@ -294,7 +253,7 @@ function sameAgentRow(left: Agent1OutputRow, right: Agent1OutputRow): boolean {
 }
 
 /**
- * Provides stable CSV ordering for deterministic artifacts.
+ * Provides stable ordering for deterministic report evidence.
  */
 function compareSummaryRows(left: SummaryRow, right: SummaryRow): number {
     return (

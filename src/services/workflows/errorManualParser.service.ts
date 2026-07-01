@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { PDFParse } from "pdf-parse";
 import type { ErrorManualEntry } from "../../types/workflows.domain";
 import { cleanPartName } from "../../utils/workflowUtils";
@@ -7,10 +6,9 @@ import { cleanPartName } from "../../utils/workflowUtils";
  * Parses the uploaded maintenance manual PDF into error-code metadata.
  */
 export async function parseErrorManual(
-    manualPath: string,
+    manual: Buffer,
 ): Promise<ReadonlyMap<string, ErrorManualEntry>> {
-    const buffer = await readFile(manualPath);
-    const parser = new PDFParse({ data: buffer });
+    const parser = new PDFParse({ data: manual });
 
     try {
         const result = await parser.getText();
