@@ -2,7 +2,7 @@
 
 Job-based machine-maintenance automation built with Bun, TypeScript, and
 Express. The service converts the workflow from
-`Agentic_Manufacturing_singlebtn.ipynb` into an asynchronous HTTP API that:
+`Agentic_Manufacturing_singlebtn.ipynb` into a streaming HTTP API that:
 
 1. analyzes machine-log errors against a PDF maintenance manual;
 2. matches recommended replacement parts to a vendor catalog;
@@ -14,7 +14,7 @@ Express. The service converts the workflow from
 
 Uploads, intermediate CSVs, invoices, and the executive PDF are processed in
 memory and released after email delivery. Compact job status remains in memory
-for a limited period so the frontend can finish polling.
+for a limited period so clients can recover state after a stream disconnects.
 
 ## Prerequisites
 
@@ -153,7 +153,8 @@ produce a `no_email_configured` status; extra addresses are unused.
 
 ## API
 
-Successful JSON responses use a `{ "data": ... }` envelope. Errors use:
+Successful JSON responses and workflow events use a `{ "data": ... }`
+envelope. Errors use:
 
 ```json
 {
@@ -175,7 +176,8 @@ Content-Type: multipart/form-data
 Example:
 
 ```bash
-curl -X POST http://localhost:3000/v1/workflows \
+curl -N -X POST http://localhost:3000/v1/workflows \
+  -H "Accept: text/event-stream" \
   -F "machineLogs=@machine_logs.csv" \
   -F "errorManual=@error_manual.pdf" \
   -F "vendorCatalog=@vendor_catalog.csv" \
@@ -185,18 +187,32 @@ curl -X POST http://localhost:3000/v1/workflows \
   -F "plantHeadEmail=plant-head@example.com"
 ```
 
-The API returns `202 Accepted` after registering the queued job in memory:
+The API returns `200 OK` with `Content-Type: text/event-stream`. It sends each
+persisted workflow state as a named Server-Sent Event and closes the stream
+after a terminal event. An abridged stream looks like:
 
-```json
-{
-  "data": {
-    "id": "wf_8b9f8c4a-...",
-    "status": "queued",
-    "currentStep": "queued",
-    "progress": 0
-  }
-}
+```text
+: connected
+
+event: progress
+data: {"data":{"id":"wf_8b9f8c4a-...","status":"queued","currentStep":"queued","progress":0}}
+
+event: progress
+data: {"data":{"id":"wf_8b9f8c4a-...","status":"running","currentStep":"log_analysis","progress":20}}
+
+event: completed
+data: {"data":{"id":"wf_8b9f8c4a-...","status":"succeeded","currentStep":"completed","progress":100}}
 ```
+
+| Event | Workflow state |
+| --- | --- |
+| `progress` | Queued or running |
+| `completed` | Succeeded |
+| `failed` | Failed |
+
+The stream also sends a `: keep-alive` comment every 15 seconds. A workflow
+failure uses the normal `{ "data": ... }` payload with status `failed`; an
+unexpected stream failure uses an `{ "error": ... }` payload.
 
 ### Get Workflow Status
 
@@ -204,8 +220,9 @@ The API returns `202 Accepted` after registering the queued job in memory:
 GET /v1/workflows/:id
 ```
 
-The response contains status, progress, vendor-email mappings, timestamps, and
-any terminal error:
+Use this endpoint to recover the latest persisted state after a stream
+disconnects. The response contains status, progress, vendor-email mappings,
+timestamps, and any terminal error:
 
 ```json
 {
@@ -262,7 +279,7 @@ required for horizontal scaling or restart recovery.
 src/
 ├── config/          # Validated environment configuration
 ├── controllers/     # HTTP request and response translation
-├── http/            # Validation, errors, and request IDs
+├── http/            # Validation, errors, request logging, and SSE
 ├── repositories/    # Expiring in-memory workflow status
 ├── routes/          # Express route wiring
 ├── schemas/         # Zod request contracts
